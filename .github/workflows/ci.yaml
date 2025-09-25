@@ -1,4 +1,4 @@
-name: CI-M10S04
+name: CI
 
 on:
   push:
@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [ main ]
   workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
 
 jobs:
   test:
@@ -27,7 +31,54 @@ jobs:
 
       - name: Install dependencies
         run: |
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
 
       - name: Run tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}
         run: pytest -q
+
+  build-and-push:
+    runs-on: ubuntu-latest
+    needs: test
+    env:
+      REGISTRY: ghcr.io
+      IMAGE_NAME: ${{ github.repository }}   # => <owner>/<repo>
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check model base exists
+        run: test -f artifacts/model.pkl
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Login a GHCR usando el GITHUB_TOKEN del repo
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Tags automáticos (latest en main, sha y tags)
+      - name: Extract metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=sha,format=long
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build image and push to ghcr
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
